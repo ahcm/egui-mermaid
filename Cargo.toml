@@ -1,0 +1,26 @@
+[package]
+name = "egui-mermaid"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT OR Apache-2.0"
+description = "Mermaid diagrams (flowchart, sequence, Gantt, pie, …) in Rust for egui"
+repository = "https://github.com/ahcm/egui-mermaid"
+readme = "README.md"
+keywords = ["egui", "mermaid", "diagram", "flowchart", "markdown"]
+categories = ["gui", "visualization"]
+exclude = ["/screenshots"]
+
+[features]
+default = ["markdown"]
+# `markdown()`: Markdown through egui_commonmark with ```mermaid blocks drawn.
+markdown = ["dep:egui_commonmark"]
+
+[dependencies]
+egui = { version = "0.36", default-features = false }
+egui_commonmark = { version = "0.25", default-features = false, optional = true }
+
+[dev-dependencies]
+eframe = { version = "0.36", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
+egui_commonmark = { version = "0.25", default-features = false, features = ["pulldown_cmark"] }
+egui_kittest = { version = "0.36", features = ["wgpu", "snapshot"] }
