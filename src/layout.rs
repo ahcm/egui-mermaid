@@ -1823,6 +1823,8 @@ pub enum CommitKind {
     Normal,
     Highlight,
     Reverse,
+    /// Mermaid's cherry marker: two cherries on stems.
+    CherryPick,
 }
 
 /// `gitGraph`: a lane per branch, commits left to right in the order given;
@@ -1879,9 +1881,11 @@ fn git(lines: &[&str], measure: Measure) -> Git {
                     ("merge", _, tag) => (String::new(), tag),
                     (_, _, tag) => (format!("{index}"), tag),
                 };
-                let kind = match attribute(line, "type:").as_str() {
-                    "HIGHLIGHT" => CommitKind::Highlight,
-                    "REVERSE" => CommitKind::Reverse,
+                // Mermaid ignores a cherry-pick's `type:`.
+                let kind = match (word, attribute(line, "type:").as_str()) {
+                    ("cherry-pick", _) => CommitKind::CherryPick,
+                    (_, "HIGHLIGHT") => CommitKind::Highlight,
+                    (_, "REVERSE") => CommitKind::Reverse,
                     _ => CommitKind::Normal,
                 };
                 commits.push(Commit { at, label, tag, lane: current, merge: merged.is_some(), kind });
@@ -2173,7 +2177,7 @@ mod tests {
         assert!(y("main") < y("c") && y("c") < y("b") && y("b") < y("d"));
         assert_eq!(
             g.commits.iter().map(|c| c.kind).collect::<Vec<_>>(),
-            [CommitKind::Normal, CommitKind::Highlight, CommitKind::Reverse, CommitKind::Normal, CommitKind::Normal]
+            [CommitKind::Normal, CommitKind::Highlight, CommitKind::Reverse, CommitKind::Normal, CommitKind::CherryPick]
         );
         assert_eq!((g.commits[4].label.as_str(), g.commits[4].tag.as_str()), ("4", "cherry-pick:1"));
         assert!(g.commits.iter().all(|c| c.at.1 == g.lanes[c.lane].1));

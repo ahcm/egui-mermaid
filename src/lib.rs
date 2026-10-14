@@ -472,6 +472,15 @@ impl Canvas {
                     self.painter.line_segment([at - Vec2::splat(d), at + Vec2::splat(d)], cross);
                     self.painter.line_segment([at + Vec2::new(-d, d), at + Vec2::new(d, -d)], cross);
                 }
+                // Mermaid's: circles of radius 2.75 at (±3, 2) with stems to (0, -5), of a 10 bullet.
+                CommitKind::CherryPick => {
+                    self.painter.circle_filled(at, r, colour(commit.lane));
+                    let (unit, white) = (r / 10.0, Color32::WHITE);
+                    for side in [-3.0, 3.0] {
+                        self.painter.circle_filled(at + Vec2::new(side, 2.0) * unit, 2.75 * unit, white);
+                        self.painter.line_segment([at + Vec2::new(side, 1.0) * unit, at + Vec2::new(0.0, -5.0) * unit], Stroke::new(unit, white));
+                    }
+                }
                 CommitKind::Normal if commit.merge => {
                     self.painter.circle(at, r, self.visuals.panel_fill, Stroke::new(2.4_f32, colour(commit.lane)));
                 }
