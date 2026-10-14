@@ -145,7 +145,7 @@ pub fn parse(source: &str, measure: Measure) -> Diagram {
         "stateDiagram" | "stateDiagram-v2" => Diagram::Flow(flow(&lines[1..], "TB", true, measure)),
         "sequenceDiagram" => Diagram::Sequence(sequence(&lines[1..], measure)),
         "pie" => Diagram::Pie(pie(&lines)),
-        "gantt" => Diagram::Gantt(gantt(&lines[1..], measure)),
+        "gantt" => Diagram::Gantt(gantt(&lines[1..], measure, today())),
         "journey" => Diagram::Journey(journey(&lines[1..], measure)),
         "gitGraph" => Diagram::Git(git(&lines[1..], measure)),
         "classDiagram" | "classDiagram-v2" => Diagram::Flow(classes(&lines[1..], measure)),
@@ -1123,6 +1123,106 @@ pub struct Gantt {
     pub ticks: Vec<(f32, String)>,
     /// x0 and x1 of each run of excluded days.
     pub excluded: Vec<(f32, f32)>,
+    /// Today's line, where the axis covers today and `todayMarker` is not `off`.
+    pub today: Option<Today>,
+}
+
+/// The line at today's date: Mermaid's default is red, 2 px.
+#[derive(Debug, PartialEq)]
+pub struct Today {
+    pub x: f32,
+    pub rgb: [u8; 3],
+    pub width: f32,
+    pub opacity: f32,
+}
+
+impl Today {
+    /// `todayMarker` CSS such as `stroke-width:5px,stroke:#0f0,opacity:0.5`;
+    /// declarations it does not know are ignored.
+    fn styled(x: f32, style: &str) -> Today {
+        let mut today = Today { x, rgb: [255, 0, 0], width: 2.0, opacity: 1.0 };
+        for declaration in style.split([',', ';']) {
+            let Some((name, value)) = declaration.split_once(':') else { continue };
+            let value = value.trim();
+            match name.trim() {
+                "stroke" => today.rgb = css_color(value).unwrap_or(today.rgb),
+                "stroke-width" => today.width = value.trim_end_matches("px").trim().parse().unwrap_or(today.width),
+                "opacity" | "stroke-opacity" => today.opacity = value.parse::<f32>().map_or(today.opacity, |o| o.clamp(0.0, 1.0)),
+                _ => {}
+            }
+        }
+        today
+    }
+}
+
+/// `#rgb`, `#rrggbb` or one of a few CSS names.
+fn css_color(text: &str) -> Option<[u8; 3]> {
+    let named = [
+        ("red", [255, 0, 0]),
+        ("green", [0, 128, 0]),
+        ("lime", [0, 255, 0]),
+        ("blue", [0, 0, 255]),
+        ("black", [0, 0, 0]),
+        ("white", [255, 255, 255]),
+        ("gray", [128, 128, 128]),
+        ("grey", [128, 128, 128]),
+        ("orange", [255, 165, 0]),
+        ("yellow", [255, 255, 0]),
+        ("purple", [128, 0, 128]),
+    ];
+    if let Some((_, rgb)) = named.iter().find(|(n, _)| text.eq_ignore_ascii_case(n)) {
+        return Some(*rgb);
+    }
+    let hex = text.strip_prefix('#')?;
+    let digit = |i: usize| u8::from_str_radix(hex.get(i..i + 1)?, 16).ok();
+    match hex.len() {
+        3 => Some([digit(0)? * 17, digit(1)? * 17, digit(2)? * 17]),
+        6 => Some([digit(0)? * 16 + digit(1)?, digit(2)? * 16 + digit(3)?, digit(4)? * 16 + digit(5)?]),
+        _ => None,
+    }
+}
+
+/// Today in days since 1970-01-01: local time in a browser, UTC elsewhere.
+fn today() -> f64 {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let now = js_sys::Date::new_0();
+        now.get_time() / 86_400_000.0 - now.get_timezone_offset() / 1440.0
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64() / 86_400.0)
+    }
+}
+
+/// The days of ticks every `count` `unit`s (`tickInterval`, as d3's
+/// `time*.every`: a field such as the day of the month divisible by `count`,
+/// weeks from Sundays counted since 1970) within `first..=last`. `None` past
+/// 1000 ticks or for an unknown unit.
+fn interval_ticks(first: f64, last: f64, count: i64, unit: &str) -> Option<Vec<f64>> {
+    const MAX: usize = 1000;
+    let (size, every): (f64, fn(i64, i64) -> bool) = match unit {
+        "millisecond" => (1.0 / 86_400_000.0, |i, n| i.rem_euclid(1000) % n == 0),
+        "second" => (1.0 / 86_400.0, |i, n| i.rem_euclid(60) % n == 0),
+        "minute" => (1.0 / 1440.0, |i, n| i.rem_euclid(60) % n == 0),
+        "hour" => (1.0 / 24.0, |i, n| i.rem_euclid(24) % n == 0),
+        "day" => (1.0, |i, n| (civil_from_days(i).2 - 1) % n == 0),
+        // 1970-01-04 was the first Sunday.
+        "week" => (1.0, |i, n| (i - 3).rem_euclid(7) == 0 && ((i - 3) / 7 + 1) % n == 0),
+        "month" => (1.0, |i, n| civil_from_days(i).2 == 1 && (civil_from_days(i).1 - 1) % n == 0),
+        _ => return None,
+    };
+    let (from, to) = ((first / size - 1e-6).ceil() as i64, (last / size + 1e-6).floor() as i64);
+    let rough = match unit {
+        "week" => 7.0 * count as f64,
+        "month" => 28.0 * count as f64,
+        _ => count as f64,
+    };
+    if count < 1 || (to - from) as f64 / rough > MAX as f64 || to - from > 10_000_000 {
+        return None;
+    }
+    let ticks: Vec<f64> = (from..=to).filter(|&i| every(i, count)).map(|i| i as f64 * size).collect();
+    (ticks.len() <= MAX).then_some(ticks)
 }
 
 #[derive(Debug)]
@@ -1446,9 +1546,10 @@ impl Excludes {
 /// a date or `after id ...`, end a date, a duration or `until id`; a task
 /// without a start follows the one before. Durations skip `excludes`
 /// (`weekends`, weekday names, dates), which are shaded. Ticks follow
-/// `axisFormat`. Fields split at commas, as in Mermaid: a `dateFormat` with
-/// a comma cannot work.
-fn gantt(lines: &[&str], measure: Measure) -> Gantt {
+/// `axisFormat`, every `tickInterval` (`1day`, `2week`, ...) where given. A
+/// line marks `today` unless `todayMarker off`. Fields split at commas, as in
+/// Mermaid: a `dateFormat` with a comma cannot work.
+fn gantt(lines: &[&str], measure: Measure, today: f64) -> Gantt {
     struct Task {
         label: String,
         id: String,
@@ -1461,8 +1562,19 @@ fn gantt(lines: &[&str], measure: Measure) -> Gantt {
     let mut sections: Vec<String> = Vec::new();
     let mut tasks = Vec::new();
     let (mut format, mut excludes, mut axis_format) = (String::from("YYYY-MM-DD"), String::new(), String::new());
+    let (mut interval, mut marker) = (None, String::new());
     for line in lines {
         let keyword = line.split_whitespace().next().unwrap_or("");
+        if keyword == "tickInterval" {
+            let value = line["tickInterval".len()..].trim();
+            let digits = value.find(|c: char| !c.is_ascii_digit()).unwrap_or(value.len());
+            interval = value[..digits].parse::<i64>().ok().map(|n| (n, value[digits..].to_string()));
+            continue;
+        }
+        if keyword == "todayMarker" {
+            marker = line["todayMarker".len()..].trim().to_string();
+            continue;
+        }
         if keyword == "title" {
             title = line["title".len()..].trim().to_string();
             continue;
@@ -1577,22 +1689,33 @@ fn gantt(lines: &[&str], measure: Measure) -> Gantt {
         }
         bands.push((name.clone(), from, y));
     }
-    // A tick every 1, 2, 7, 14, 28 ... days, at most ten.
+    // A tick every 1, 2, 7, 14, 28 ... days, at most ten, unless `tickInterval` says.
     let span = last - first;
-    let step = [1.0 / 24.0, 1.0 / 4.0, 1.0, 2.0, 7.0, 14.0, 28.0, 56.0, 91.0, 182.0, 364.0].into_iter().find(|s| span / s <= 10.0).unwrap_or(728.0);
-    let mut ticks = Vec::new();
-    let mut day = (first / step).ceil() * step;
-    while day <= last + 1e-9 {
-        let (yy, mm, dd) = civil_from_days(day.floor() as i64);
-        let text = match step {
-            _ if !axis_format.is_empty() => axis_date(day, &axis_format),
-            s if s < 1.0 => format!("{:02}:{:02}", ((day.fract() * 24.0).round() as i64) % 24, 0),
-            s if s >= 91.0 => format!("{yy}-{mm:02}"),
-            _ => format!("{mm:02}-{dd:02}"),
-        };
-        ticks.push((x(day), text));
-        day += step;
-    }
+    let given = interval.and_then(|(n, unit)| Some((interval_ticks(first, last, n, &unit)?, unit)));
+    let (days, label): (Vec<f64>, &str) = match &given {
+        Some((days, unit)) => (days.clone(), match unit.as_str() {
+            "millisecond" | "second" => "%H:%M:%S",
+            "minute" | "hour" => "%H:%M",
+            "month" => "%Y-%m",
+            _ => "%m-%d",
+        }),
+        None => {
+            let step = [1.0 / 24.0, 1.0 / 4.0, 1.0, 2.0, 7.0, 14.0, 28.0, 56.0, 91.0, 182.0, 364.0].into_iter().find(|s| span / s <= 10.0).unwrap_or(728.0);
+            let mut days = Vec::new();
+            let mut day = (first / step).ceil() * step;
+            while day <= last + 1e-9 {
+                days.push(day);
+                day += step;
+            }
+            (days, match step {
+                s if s < 1.0 => "%H:%M",
+                s if s >= 91.0 => "%Y-%m",
+                _ => "%m-%d",
+            })
+        }
+    };
+    let format_of = if axis_format.is_empty() { label } else { axis_format.as_str() };
+    let ticks = days.into_iter().map(|day| (x(day), axis_date(day, format_of))).collect();
     // Runs of excluded days, unless they would be too thin to see.
     let mut excluded: Vec<(f32, f32)> = Vec::new();
     if excludes.any() && last - first <= 400.0 {
@@ -1607,7 +1730,8 @@ fn gantt(lines: &[&str], measure: Measure) -> Gantt {
             }
         }
     }
-    Gantt { title, size: (axis + GANTT_WIDTH + 24.0, y + 28.0), axis, top, bottom: y, bars, sections: bands, ticks, excluded }
+    let today = (marker != "off" && (first..=last).contains(&today)).then(|| Today::styled(x(today), &marker));
+    Gantt { title, size: (axis + GANTT_WIDTH + 24.0, y + 28.0), axis, top, bottom: y, bars, sections: bands, ticks, excluded, today }
 }
 
 /// Width of a journey task's column.
@@ -1923,6 +2047,41 @@ mod tests {
         assert!(g.lines.contains(&(g.commits[1].at, g.commits[2].at, 1)));
         assert!(g.lines.contains(&(g.commits[2].at, g.commits[4].at, 1)));
         assert!(g.commits.windows(2).all(|w| w[0].at.0 < w[1].at.0));
+    }
+
+    #[test]
+    fn tick_intervals_follow_d3_fields_and_today_is_marked() {
+        let day = |y, m, d| days_from_civil(y, m, d) as f64;
+        let lines = |extra: &str| -> Vec<String> {
+            let text = format!("dateFormat YYYY-MM-DD\n{extra}\nA : 2026-10-01, 2026-11-20\n");
+            text.lines().map(str::to_string).collect()
+        };
+        let chart = |extra: &str, today: f64| {
+            let owned = lines(extra);
+            gantt(&owned.iter().map(String::as_str).collect::<Vec<_>>(), &measure, today)
+        };
+        let texts = |g: &Gantt| g.ticks.iter().map(|t| t.1.clone()).collect::<Vec<_>>();
+        // Days of the month 1, 11, 21, 31; then Sundays of even weeks since 1970.
+        let ten = chart("tickInterval 10day", 0.0);
+        assert_eq!(texts(&ten), ["10-01", "10-11", "10-21", "10-31", "11-01", "11-11"]);
+        let weeks = chart("tickInterval 2week\naxisFormat %a %d", 0.0);
+        assert_eq!(texts(&weeks), ["Sun 04", "Sun 18", "Sun 01", "Sun 15"]);
+        assert_eq!(texts(&chart("tickInterval 1month", 0.0)), ["2026-10", "2026-11"]);
+        // Too many ticks or a unit Mermaid lacks: the automatic ones.
+        let automatic = texts(&chart("", 0.0));
+        assert_eq!(texts(&chart("tickInterval 1minute", 0.0)), automatic);
+        assert_eq!(texts(&chart("tickInterval 1fortnight", 0.0)), automatic);
+        assert_eq!(interval_ticks(0.0, 0.25, 3, "hour").map(|t| t.len()), Some(3));
+        // Today, inside the axis: red and 2 px unless styled; outside or off: none.
+        let marked = chart("", day(2026, 10, 14));
+        let x = marked.ticks[0].0 + (marked.ticks[1].0 - marked.ticks[0].0) * (day(2026, 10, 14) - day(2026, 10, 1)) as f32 / 7.0;
+        let today = marked.today.unwrap();
+        assert!((today.x - x).abs() < 1e-3, "{} against {x}", today.x);
+        assert_eq!((today.rgb, today.width, today.opacity), ([255, 0, 0], 2.0, 1.0));
+        let styled = chart("todayMarker stroke-width:5px,stroke:#0f0,opacity:0.5", day(2026, 10, 14)).today.unwrap();
+        assert_eq!((styled.rgb, styled.width, styled.opacity), ([0, 255, 0], 5.0, 0.5));
+        assert!(chart("todayMarker off", day(2026, 10, 14)).today.is_none());
+        assert!(chart("", day(2027, 1, 1)).today.is_none());
     }
 
     #[test]

@@ -364,6 +364,11 @@ impl Canvas {
             self.painter.line_segment([self.at((*x, gantt.top)), self.at((*x, gantt.bottom))], grid);
             self.text(self.at((*x, gantt.bottom + 4.0)), Align2::CENTER_TOP, text);
         }
+        if let Some(today) = &gantt.today {
+            let [r, g, b] = today.rgb;
+            let color = Color32::from_rgb(r, g, b).gamma_multiply(today.opacity);
+            self.painter.line_segment([self.at((today.x, gantt.top)), self.at((today.x, gantt.bottom))], Stroke::new(today.width * self.scale, color));
+        }
         for bar in &gantt.bars {
             let (x0, y0, x1, y1) = bar.rect;
             self.text(self.at((14.0, (y0 + y1) / 2.0)), Align2::LEFT_CENTER, &bar.label);

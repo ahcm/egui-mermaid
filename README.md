@@ -7,7 +7,7 @@
 Drawn: flowcharts (`graph`, `flowchart`; shapes, subgraphs, edge labels, dotted and thick
 lines), state, class and entity-relationship diagrams and mind maps (drawn as flowcharts),
 sequence diagrams (notes, `loop`/`alt` frames), Gantt charts (`dateFormat`, `axisFormat`,
-`after`, durations), user journeys, git graphs and pie charts. Other kinds are reported as
+`tickInterval`, `todayMarker`, `after`, durations), user journeys, git graphs and pie charts. Other kinds are reported as
 unsupported. Flowcharts use a layered (Sugiyama) layout.
 
 ## Use
