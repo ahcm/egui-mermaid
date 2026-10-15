@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.1
 
 - Gantt: `tickInterval` (`1day`, `2week`, `1month`, ... as d3's `every`;
   over 1000 ticks falls back to automatic ones) and the today line
